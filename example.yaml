@@ -1,0 +1,9 @@
+modules:
+  - name: contact_graph_infer
+    input: "+1XXXXXXXX"
+    config:
+      leak_paths:
+        - "/data/leaks/contacts.txt"
+      min_occurrences: 2
+      max_contacts: 50
+      output_dir: "~/.opentrace/output"
