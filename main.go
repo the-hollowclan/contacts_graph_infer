@@ -38,6 +38,13 @@ type Graph struct {
 	Meta  map[string]interface{} `json:"meta"`
 }
 
+// ---------------- WRAPPED INPUT ----------------
+// This matches opentrace chaining behavior
+
+type WrappedOutput struct {
+	Result string `json:"result"`
+}
+
 // ---------------- RESULT ----------------
 
 type Relationship struct {
@@ -72,16 +79,22 @@ func (m *Module) Run(input sdk.Input) (sdk.Output, error) {
 	subject := cfg.Subject[0]
 	target := cfg.Relation[0]
 
-	// Parse graph from previous module
+	// -------- UNWRAP PREVIOUS MODULE OUTPUT --------
+
+	var wrapped WrappedOutput
+	if err := json.Unmarshal([]byte(input.Input), &wrapped); err != nil {
+		return sdk.Output{}, fmt.Errorf("invalid chained input: %w", err)
+	}
+
 	var graph Graph
-	if err := json.Unmarshal([]byte(input.Input), &graph); err != nil {
-		return sdk.Output{}, fmt.Errorf("invalid graph input: %w", err)
+	if err := json.Unmarshal([]byte(wrapped.Result), &graph); err != nil {
+		return sdk.Output{}, fmt.Errorf("invalid graph json: %w", err)
 	}
 
 	// Feature extraction
 	signals := extractFeatures(graph, subject, target)
 
-	// ONNX inference (stubbed)
+	// ONNX inference (stub)
 	confidence := runONNX(cfg.Model, signals)
 
 	result := Relationship{
@@ -132,11 +145,10 @@ func extractFeatures(graph Graph, subject, target string) map[string]float32 {
 // ---------------- ONNX STUB ----------------
 
 func runONNX(modelPath string, features map[string]float32) float32 {
-	// Placeholder logic until onnxruntime-go is wired
 	score := float32(0)
 
 	score += features["co_occurrence"] * 0.15
-	score += features["shared_links"] * 0.1
+	score += features["shared_links"] * 0.10
 
 	if features["reciprocal"] > 0 {
 		score += 0.35
