@@ -1,3 +1,4 @@
+modules:
 - name: contacts_graph_extract
   config:
     leak: ./leaks/contacts.csv
@@ -7,6 +8,6 @@
     from: contacts_graph_extract
     artifact: graph
   config:
-    model: ./models/relationship.onnx
-    subject: ["+12025550123"]
-    relation: ["+12025559876"]
+    model: ./models/model.onnx
+    subject: ["+447911123456"]
+    relation: ["+12025550505"]

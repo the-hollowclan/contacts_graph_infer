@@ -6,7 +6,7 @@ import (
 	"os"
 	"path/filepath"
 
-	"github.com/its-ernest/opentrace/sdk"
+	"github.com/its-ernest/osintrace/sdk"
 )
 
 type Module struct{}
