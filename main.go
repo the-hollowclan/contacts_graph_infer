@@ -61,7 +61,6 @@ func (m *Module) Name() string {
 }
 
 func (m *Module) Run(input sdk.Input) (sdk.Output, error) {
-	// Parse config
 	var cfg config
 	rawCfg, _ := json.Marshal(input.Config)
 	if err := json.Unmarshal(rawCfg, &cfg); err != nil {
@@ -79,22 +78,13 @@ func (m *Module) Run(input sdk.Input) (sdk.Output, error) {
 	subject := cfg.Subject[0]
 	target := cfg.Relation[0]
 
-	// -------- UNWRAP PREVIOUS MODULE OUTPUT --------
-
-	var wrapped WrappedOutput
-	if err := json.Unmarshal([]byte(input.Input), &wrapped); err != nil {
-		return sdk.Output{}, fmt.Errorf("invalid chained input: %w", err)
-	}
-
+	// 🔥 THIS IS THE ONLY CORRECT PARSE
 	var graph Graph
-	if err := json.Unmarshal([]byte(wrapped.Result), &graph); err != nil {
-		return sdk.Output{}, fmt.Errorf("invalid graph json: %w", err)
+	if err := json.Unmarshal([]byte(input.Input), &graph); err != nil {
+		return sdk.Output{}, fmt.Errorf("invalid graph input: %w", err)
 	}
 
-	// Feature extraction
 	signals := extractFeatures(graph, subject, target)
-
-	// ONNX inference (stub)
 	confidence := runONNX(cfg.Model, signals)
 
 	result := Relationship{
