@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
+	"path/filepath"
 
 	"github.com/its-ernest/opentrace/sdk"
 )
@@ -38,12 +39,6 @@ type Graph struct {
 	Meta  map[string]interface{} `json:"meta"`
 }
 
-// ---------------- OPENTRACE WRAPPER ----------------
-
-type WrappedOutput struct {
-	Result string `json:"result"`
-}
-
 // ---------------- RESULT ----------------
 
 type Relationship struct {
@@ -59,37 +54,48 @@ func (m *Module) Name() string {
 	return "contacts_graph_infer"
 }
 
-func (m *Module) Run(input sdk.Input) (sdk.Output, error) {
+func (m *Module) Run(input sdk.Input, ctx sdk.Context) error {
 	// -------- Parse config --------
 	var cfg config
-	rawCfg, _ := json.Marshal(input.Config)
+	rawCfg, err := json.Marshal(input.Config)
+	if err != nil {
+		return err
+	}
 	if err := json.Unmarshal(rawCfg, &cfg); err != nil {
-		return sdk.Output{}, fmt.Errorf("invalid config: %w", err)
+		return fmt.Errorf("invalid config: %w", err)
 	}
 
 	if cfg.Model == "" {
-		return sdk.Output{}, fmt.Errorf("model path is required")
+		return fmt.Errorf("config.model is required")
 	}
 
 	if _, err := os.Stat(cfg.Model); err != nil {
-		return sdk.Output{}, fmt.Errorf("onnx model not found: %s", cfg.Model)
+		return fmt.Errorf("model not found: %s", cfg.Model)
 	}
 
 	if len(cfg.Subject) == 0 || len(cfg.Relation) == 0 {
-		return sdk.Output{}, fmt.Errorf("subject and relation must be provided")
+		return fmt.Errorf("config.subject and config.relation are required")
 	}
 
 	subject := cfg.Subject[0]
 	target := cfg.Relation[0]
 
-	// -------- Decode input graph (robust) --------
-	graph, err := decodeGraphInput(input.Input)
+	fmt.Fprintln(os.Stderr, "loading graph:", input.Input)
+	fmt.Fprintln(os.Stderr, "subject:", subject, "target:", target)
+
+	// -------- Load graph artifact --------
+	rawGraph, err := os.ReadFile(input.Input)
 	if err != nil {
-		return sdk.Output{}, err
+		return fmt.Errorf("failed to read graph artifact: %w", err)
+	}
+
+	var graph Graph
+	if err := json.Unmarshal(rawGraph, &graph); err != nil {
+		return fmt.Errorf("invalid graph JSON: %w", err)
 	}
 
 	if len(graph.Nodes) == 0 || len(graph.Edges) == 0 {
-		return sdk.Output{}, fmt.Errorf("graph is empty or malformed")
+		return fmt.Errorf("graph is empty or malformed")
 	}
 
 	// -------- Feature extraction + inference --------
@@ -103,39 +109,38 @@ func (m *Module) Run(input sdk.Input) (sdk.Output, error) {
 		Explanation: "Graph co-occurrence and reciprocal contact inference",
 	}
 
-	raw, err := json.Marshal(result)
+	// -------- Write result artifact --------
+	resultPath := filepath.Join(ctx.StepDir, "relationship.json")
+	rawResult, err := json.MarshalIndent(result, "", "  ")
 	if err != nil {
-		return sdk.Output{}, fmt.Errorf("failed to encode result: %w", err)
+		return err
 	}
 
-	return sdk.Output{Result: string(raw)}, nil
-}
-
-// ---------------- INPUT DECODER ----------------
-
-func decodeGraphInput(input string) (Graph, error) {
-	var graph Graph
-
-	// Case 1: input is already a graph
-	if err := json.Unmarshal([]byte(input), &graph); err == nil {
-		return graph, nil
+	if err := os.WriteFile(resultPath, rawResult, 0o644); err != nil {
+		return err
 	}
 
-	// Case 2: input is wrapped opentrace output
-	var wrapped WrappedOutput
-	if err := json.Unmarshal([]byte(input), &wrapped); err != nil {
-		return Graph{}, fmt.Errorf("invalid input format (not graph or wrapped result): %w", err)
+	fmt.Fprintln(os.Stderr, "relationship written:", resultPath)
+	fmt.Fprintln(os.Stderr, "confidence:", confidence)
+
+	// -------- Write output index --------
+	outputIndex := map[string]any{
+		"artifacts": map[string]any{
+			"relationship": map[string]any{
+				"path": "relationship.json",
+				"type": "application/json",
+			},
+		},
 	}
 
-	if wrapped.Result == "" {
-		return Graph{}, fmt.Errorf("wrapped result is empty")
+	indexPath := filepath.Join(ctx.StepDir, "output.json")
+	rawIndex, _ := json.MarshalIndent(outputIndex, "", "  ")
+
+	if err := os.WriteFile(indexPath, rawIndex, 0o644); err != nil {
+		return err
 	}
 
-	if err := json.Unmarshal([]byte(wrapped.Result), &graph); err != nil {
-		return Graph{}, fmt.Errorf("invalid graph payload: %w", err)
-	}
-
-	return graph, nil
+	return nil
 }
 
 // ---------------- FEATURE ENGINEERING ----------------
