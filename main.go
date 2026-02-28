@@ -74,7 +74,7 @@ func (m *Module) Run(input sdk.Input) (sdk.Output, error) {
 
 	// Parse graph from previous module
 	var graph Graph
-	if err := json.Unmarshal([]byte(input.Value), &graph); err != nil {
+	if err := json.Unmarshal([]byte(input.Input), &graph); err != nil {
 		return sdk.Output{}, fmt.Errorf("invalid graph input: %w", err)
 	}
 
