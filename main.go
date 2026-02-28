@@ -38,8 +38,7 @@ type Graph struct {
 	Meta  map[string]interface{} `json:"meta"`
 }
 
-// ---------------- WRAPPED INPUT ----------------
-// This matches opentrace chaining behavior
+// ---------------- OPENTRACE WRAPPER ----------------
 
 type WrappedOutput struct {
 	Result string `json:"result"`
@@ -61,10 +60,15 @@ func (m *Module) Name() string {
 }
 
 func (m *Module) Run(input sdk.Input) (sdk.Output, error) {
+	// -------- Parse config --------
 	var cfg config
 	rawCfg, _ := json.Marshal(input.Config)
 	if err := json.Unmarshal(rawCfg, &cfg); err != nil {
-		return sdk.Output{}, err
+		return sdk.Output{}, fmt.Errorf("invalid config: %w", err)
+	}
+
+	if cfg.Model == "" {
+		return sdk.Output{}, fmt.Errorf("model path is required")
 	}
 
 	if _, err := os.Stat(cfg.Model); err != nil {
@@ -78,12 +82,17 @@ func (m *Module) Run(input sdk.Input) (sdk.Output, error) {
 	subject := cfg.Subject[0]
 	target := cfg.Relation[0]
 
-	// 🔥 THIS IS THE ONLY CORRECT PARSE
-	var graph Graph
-	if err := json.Unmarshal([]byte(input.Input), &graph); err != nil {
-		return sdk.Output{}, fmt.Errorf("invalid graph input: %w", err)
+	// -------- Decode input graph (robust) --------
+	graph, err := decodeGraphInput(input.Input)
+	if err != nil {
+		return sdk.Output{}, err
 	}
 
+	if len(graph.Nodes) == 0 || len(graph.Edges) == 0 {
+		return sdk.Output{}, fmt.Errorf("graph is empty or malformed")
+	}
+
+	// -------- Feature extraction + inference --------
 	signals := extractFeatures(graph, subject, target)
 	confidence := runONNX(cfg.Model, signals)
 
@@ -94,8 +103,39 @@ func (m *Module) Run(input sdk.Input) (sdk.Output, error) {
 		Explanation: "Graph co-occurrence and reciprocal contact inference",
 	}
 
-	raw, _ := json.Marshal(result)
+	raw, err := json.Marshal(result)
+	if err != nil {
+		return sdk.Output{}, fmt.Errorf("failed to encode result: %w", err)
+	}
+
 	return sdk.Output{Result: string(raw)}, nil
+}
+
+// ---------------- INPUT DECODER ----------------
+
+func decodeGraphInput(input string) (Graph, error) {
+	var graph Graph
+
+	// Case 1: input is already a graph
+	if err := json.Unmarshal([]byte(input), &graph); err == nil {
+		return graph, nil
+	}
+
+	// Case 2: input is wrapped opentrace output
+	var wrapped WrappedOutput
+	if err := json.Unmarshal([]byte(input), &wrapped); err != nil {
+		return Graph{}, fmt.Errorf("invalid input format (not graph or wrapped result): %w", err)
+	}
+
+	if wrapped.Result == "" {
+		return Graph{}, fmt.Errorf("wrapped result is empty")
+	}
+
+	if err := json.Unmarshal([]byte(wrapped.Result), &graph); err != nil {
+		return Graph{}, fmt.Errorf("invalid graph payload: %w", err)
+	}
+
+	return graph, nil
 }
 
 // ---------------- FEATURE ENGINEERING ----------------
@@ -103,7 +143,7 @@ func (m *Module) Run(input sdk.Input) (sdk.Output, error) {
 func extractFeatures(graph Graph, subject, target string) map[string]float32 {
 	var coOccurrence float32
 	var reciprocal float32
-	var sharedOwners float32
+	var sharedLinks float32
 
 	owners := make(map[string]bool)
 
@@ -121,14 +161,14 @@ func extractFeatures(graph Graph, subject, target string) map[string]float32 {
 			reciprocal = 1
 		}
 		if owners[e.ContactPhone] && e.OwnerPhone == target {
-			sharedOwners++
+			sharedLinks++
 		}
 	}
 
 	return map[string]float32{
 		"co_occurrence": coOccurrence,
 		"reciprocal":    reciprocal,
-		"shared_links":  sharedOwners,
+		"shared_links":  sharedLinks,
 	}
 }
 
