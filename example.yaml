@@ -1,9 +1,14 @@
 modules:
-  - name: contact_graph_infer
-    input: "+1XXXXXXXX"
+  - name: contacts_graph_extract
+    input: ""
+    config: 
+      leak: "py-ml/contacts_region.csv"
+
+  - name: contacts_graph_infer
+    input: "$contacts_graph_extract"
     config:
-      leak_paths:
-        - "/data/leaks/contacts.txt"
-      min_occurrences: 2
-      max_contacts: 50
-      output_dir: "~/.opentrace/output"
+      model: "./model.onnx"
+      subject: 
+        - "+12025550505"
+      relation: # for infering confident relationship between contacts
+        - "+447922334455"

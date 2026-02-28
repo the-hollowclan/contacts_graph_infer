@@ -1,116 +1,156 @@
 package main
 
 import (
-    "encoding/json"
-    "fmt"
-    "os"
-    "path/filepath"
-    "strings"
+	"encoding/json"
+	"fmt"
+	"os"
 
-    "github.com/its-ernest/opentrace/sdk"
+	"github.com/its-ernest/opentrace/sdk"
 )
 
 type Module struct{}
 
+// ---------------- CONFIG ----------------
+
 type config struct {
-    LeakPaths      []string `json:"leak_paths"`
-    MinOccurrences int      `json:"min_occurrences"`
-    MaxContacts    int      `json:"max_contacts"`
-    OutputDir      string   `json:"output_dir"`
+	Model    string   `json:"model"`
+	Subject  []string `json:"subject"`
+	Relation []string `json:"relation"`
 }
 
-type output struct {
-    Subject      string `json:"subject"`
-    ContactsFile string `json:"contacts_file"`
-    ContactCount int    `json:"contact_count"`
-    Online       bool   `json:"online"`
-    Source       string `json:"source"`
+// ---------------- GRAPH TYPES ----------------
+
+type Person struct {
+	Name     string `json:"name"`
+	Phone    string `json:"phone"`
+	Location string `json:"location,omitempty"`
 }
+
+type Edge struct {
+	OwnerPhone   string `json:"owner_phone"`
+	ContactPhone string `json:"contact_phone"`
+	Weight       int    `json:"weight"`
+}
+
+type Graph struct {
+	Nodes []Person               `json:"nodes"`
+	Edges []Edge                 `json:"edges"`
+	Meta  map[string]interface{} `json:"meta"`
+}
+
+// ---------------- RESULT ----------------
+
+type Relationship struct {
+	With        string             `json:"with"`
+	Confidence  float32            `json:"confidence"`
+	Signals     map[string]float32 `json:"signals"`
+	Explanation string             `json:"explanation"`
+}
+
+// ---------------- MODULE ----------------
 
 func (m *Module) Name() string {
-    return "contact_graph_infer"
+	return "contacts_graph_infer"
 }
 
 func (m *Module) Run(input sdk.Input) (sdk.Output, error) {
-    // Parse config from map[string]any
-    var cfg config
-    rawCfg, err := json.Marshal(input.Config)
-    if err != nil {
-        return sdk.Output{}, fmt.Errorf("config marshal: %w", err)
-    }
-    if err := json.Unmarshal(rawCfg, &cfg); err != nil {
-        return sdk.Output{}, fmt.Errorf("invalid config: %w", err)
-    }
+	// Parse config
+	var cfg config
+	rawCfg, _ := json.Marshal(input.Config)
+	if err := json.Unmarshal(rawCfg, &cfg); err != nil {
+		return sdk.Output{}, err
+	}
 
-    // Ensure output dir exists
-    outDir := os.ExpandEnv(cfg.OutputDir)
-    if outDir != "" {
-        _ = os.MkdirAll(outDir, os.ModePerm)
-    }
+	if _, err := os.Stat(cfg.Model); err != nil {
+		return sdk.Output{}, fmt.Errorf("onnx model not found: %s", cfg.Model)
+	}
 
-    // Subject is the literal input string
-    subject := input.Input
+	if len(cfg.Subject) == 0 || len(cfg.Relation) == 0 {
+		return sdk.Output{}, fmt.Errorf("subject and relation must be provided")
+	}
 
-    // Scan for co-occurrences
-    contactCounts := make(map[string]int)
-    for _, p := range cfg.LeakPaths {
-        data, err := os.ReadFile(p)
-        if err != nil {
-            continue
-        }
-        lines := strings.Split(string(data), "\n")
-        for _, line := range lines {
-            if strings.Contains(line, subject) {
-                parts := strings.Fields(line)
-                for _, f := range parts {
-                    if f != subject {
-                        contactCounts[f]++
-                    }
-                }
-            }
-        }
-    }
+	subject := cfg.Subject[0]
+	target := cfg.Relation[0]
 
-    // Prepare CSV output
-    csvPath := filepath.Join(outDir, fmt.Sprintf("%s_contacts.csv", strings.ReplaceAll(subject, "+", "")))
-    outF, err := os.Create(csvPath)
-    if err != nil {
-        return sdk.Output{}, fmt.Errorf("could not create CSV: %w", err)
-    }
-    defer outF.Close()
+	// Parse graph from previous module
+	var graph Graph
+	if err := json.Unmarshal([]byte(input.Value), &graph); err != nil {
+		return sdk.Output{}, fmt.Errorf("invalid graph input: %w", err)
+	}
 
-    fmt.Fprintln(outF, "contact,occurrences")
-    count := 0
-    for c, ccount := range contactCounts {
-        if ccount >= cfg.MinOccurrences && (cfg.MaxContacts == 0 || count < cfg.MaxContacts) {
-            fmt.Fprintf(outF, "%s,%d\n", c, ccount)
-            count++
-        }
-    }
+	// Feature extraction
+	signals := extractFeatures(graph, subject, target)
 
-    // Build structured result
-    res := output{
-        Subject:      subject,
-        ContactsFile: csvPath,
-        ContactCount: count,
-        Online:       true,
-        Source:       "leak_cooccurrence_inference",
-    }
+	// ONNX inference (stubbed)
+	confidence := runONNX(cfg.Model, signals)
 
-    // Marshal structured result as JSON string
-    raw, err := json.Marshal(res)
-    if err != nil {
-        return sdk.Output{}, fmt.Errorf("marshal result: %w", err)
-    }
+	result := Relationship{
+		With:        target,
+		Confidence:  confidence,
+		Signals:     signals,
+		Explanation: "Graph co-occurrence and reciprocal contact inference",
+	}
 
-    // You may also print human-friendly logs for operator
-    fmt.Printf("Inferred %d contacts for %s\n", count, subject)
-    fmt.Printf("Contacts list saved to: %s\n", csvPath)
-
-    // Return the JSON string as required
-    return sdk.Output{Result: string(raw)}, nil
+	raw, _ := json.Marshal(result)
+	return sdk.Output{Result: string(raw)}, nil
 }
 
+// ---------------- FEATURE ENGINEERING ----------------
+
+func extractFeatures(graph Graph, subject, target string) map[string]float32 {
+	var coOccurrence float32
+	var reciprocal float32
+	var sharedOwners float32
+
+	owners := make(map[string]bool)
+
+	for _, e := range graph.Edges {
+		if e.OwnerPhone == subject {
+			owners[e.ContactPhone] = true
+		}
+	}
+
+	for _, e := range graph.Edges {
+		if e.OwnerPhone == subject && e.ContactPhone == target {
+			coOccurrence += float32(e.Weight)
+		}
+		if e.OwnerPhone == target && e.ContactPhone == subject {
+			reciprocal = 1
+		}
+		if owners[e.ContactPhone] && e.OwnerPhone == target {
+			sharedOwners++
+		}
+	}
+
+	return map[string]float32{
+		"co_occurrence": coOccurrence,
+		"reciprocal":    reciprocal,
+		"shared_links":  sharedOwners,
+	}
+}
+
+// ---------------- ONNX STUB ----------------
+
+func runONNX(modelPath string, features map[string]float32) float32 {
+	// Placeholder logic until onnxruntime-go is wired
+	score := float32(0)
+
+	score += features["co_occurrence"] * 0.15
+	score += features["shared_links"] * 0.1
+
+	if features["reciprocal"] > 0 {
+		score += 0.35
+	}
+
+	if score > 1 {
+		score = 1
+	}
+
+	return score
+}
+
+// ---------------- MAIN ----------------
+
 func main() {
-    sdk.Run(&Module{})
+	sdk.Run(&Module{})
 }

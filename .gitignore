@@ -1,0 +1,11 @@
+venv
+__pycache__/
+
+go.sum
+
+leaks/
+
+py-ml/
+*.onnx
+*.csv
+*.pkl

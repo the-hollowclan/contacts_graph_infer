@@ -1,4 +1,4 @@
-name: contact_graph_infer
+name: contacts_graph_infer
 version: 0.1.0
 description: >
   Infers likely contact relationships by analyzing
